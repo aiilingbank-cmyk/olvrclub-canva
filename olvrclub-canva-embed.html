@@ -1,0 +1,587 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>OLVR Club — Events & Registration</title>
+    <!-- Tailwind CDN (no build step) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      // Tailwind config (optional)
+      tailwind.config = { theme: { extend: { borderRadius: { '2xl': '1rem' } } } }
+    </script>
+    <style> body { background: linear-gradient(to bottom, #f8fafc, #ffffff); } </style>
+  </head>
+  <body class="min-h-screen">
+    <div id="root"></div>
+
+    <!-- React / ReactDOM / Framer Motion / lucide-react via ESM CDN -->
+    <script type="module">
+      import React, { useEffect, useMemo, useState } from "https://esm.sh/react@18?dev";
+      import { createRoot } from "https://esm.sh/react-dom@18/client?dev";
+      import { motion } from "https://esm.sh/framer-motion@11";
+      import * as Lucide from "https://esm.sh/lucide-react@0.441.0";
+
+      // --- Minimal UI components (Tailwind) ---
+      const Button = React.forwardRef(({ className='', variant='default', size='md', ...props}, ref) => {
+        const variants = {
+          default: 'bg-black text-white hover:bg-black/90',
+          secondary: 'bg-slate-100 hover:bg-slate-200',
+          outline: 'border border-slate-300 hover:bg-slate-50',
+          destructive: 'bg-rose-600 text-white hover:bg-rose-700',
+          ghost: 'hover:bg-slate-100'
+        };
+        const sizes = { md: 'h-10 px-4 rounded-2xl', sm: 'h-8 px-3 rounded-xl', icon: 'h-9 w-9 rounded-xl p-0 grid place-items-center' };
+        return React.createElement('button', { ref, className: \`\${variants[variant]||variants.default} \${sizes[size]||sizes.md} \${className}\`, ...props });
+      });
+      const Card = ({ className='', ...props}) => React.createElement('div', { className: \`rounded-2xl border border-slate-200 bg-white \${className}\`, ...props });
+      const CardContent = ({ className='', ...props}) => React.createElement('div', { className: \`p-4 \${className}\`, ...props });
+      const Input = React.forwardRef(({ className='', ...props}, ref) => React.createElement('input', { ref, className: \`w-full h-10 px-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-black/40 \${className}\`, ...props }));
+      const Textarea = React.forwardRef(({ className='', rows=3, ...props}, ref) => React.createElement('textarea', { ref, rows, className: \`w-full px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-black/40 \${className}\`, ...props }));
+      const Label = ({ className='', ...props}) => React.createElement('label', { className: \`text-sm font-medium \${className}\`, ...props });
+
+      // Tabs (very small implementation)
+      function Tabs({ defaultValue, children, className='' }){
+        const [value, setValue] = useState(defaultValue);
+        return React.createElement('div', { className, 'data-tabs-value': value },
+          React.Children.map(children, child => React.cloneElement(child, { value, setValue }))
+        );
+      }
+      function TabsList({ children, className='', value, setValue }){
+        return React.createElement('div', { className: \`inline-grid gap-2 p-1 bg-slate-100 rounded-2xl \${className}\` },
+          React.Children.map(children, child => React.cloneElement(child, { value, setValue }))
+        );
+      }
+      function TabsTrigger({ value:val, setValue, children, className='', value }){
+        const active = value === val;
+        return React.createElement('button', { onClick: ()=> setValue(val), className: \`\${active?'bg-white shadow':''} px-3 py-2 rounded-xl text-sm \${className}\` }, children);
+      }
+      function TabsContent({ value:val, value, children, className='' }){
+        if (value !== val) return null;
+        return React.createElement('div', { className }, children);
+      }
+
+      // Select (lightweight)
+      function Select({ value, onValueChange, children }){
+        // naive select: pick content area and items from children
+        const [open, setOpen] = useState(false);
+        const trigger = React.Children.toArray(children).find(ch => ch.type && ch.type.displayName==='SelectTrigger');
+        const content = React.Children.toArray(children).find(ch => ch.type && ch.type.displayName==='SelectContent');
+        return React.createElement('div', { className: 'relative' },
+          React.cloneElement(trigger, { onClick: ()=> setOpen(o=>!o), value }),
+          open && React.cloneElement(content, { onSelect: (val)=> { onValueChange?.(val); setOpen(false); }, value })
+        );
+      }
+      function SelectTrigger({ children, className='', onClick }){
+        return React.createElement('div', { onClick, className: \`h-10 px-3 rounded-xl border border-slate-300 flex items-center justify-between cursor-pointer \${className}\` }, children);
+      }
+      SelectTrigger.displayName='SelectTrigger';
+      function SelectValue({ placeholder }){ return React.createElement('span', { className: 'text-sm text-slate-600' }, placeholder||''); }
+      function SelectContent({ children, onSelect, value }){
+        const items = React.Children.toArray(children).map(ch => React.cloneElement(ch, { onClick: ()=> onSelect?.(ch.props.value), active: value===ch.props.value }));
+        return React.createElement('div', { className: 'absolute z-10 mt-2 grid bg-white border rounded-xl p-1 max-h-60 overflow-auto w-full' }, items);
+      }
+      SelectContent.displayName='SelectContent';
+      function SelectItem({ value, children, onClick, active }){
+        return React.createElement('button', { onClick, className: \`px-3 py-2 text-left rounded-lg \${active?'bg-slate-100':''} hover:bg-slate-100\` }, children);
+      }
+
+      // --- App helpers ---
+      const LS_EVENTS_KEY = "olvr_events_v1";
+      const LS_REGIS_KEY = "olvr_regs_v1";
+      const LS_ADMIN_PASS = "olvr_admin_pass_v1";
+      const DEFAULT_ADMIN_PASS = "olvradmin";
+      const getAdminPass = () => { try { return localStorage.getItem(LS_ADMIN_PASS) || DEFAULT_ADMIN_PASS; } catch { return DEFAULT_ADMIN_PASS; } };
+      const setAdminPass = (pass) => { try { localStorage.setItem(LS_ADMIN_PASS, pass); return true; } catch { return false; } };
+      const loadLS = (key, fallback) => { try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; } catch { return fallback; } };
+      const saveLS = (key, value) => localStorage.setItem(key, JSON.stringify(value));
+      const uid = () => Math.random().toString(36).slice(2, 10);
+      const toDateThai = (d) => new Date(d + "T00:00:00").toLocaleDateString("th-TH", { year: "numeric", month: "short", day: "numeric" });
+      const copy = async (text) => { try { await navigator.clipboard.writeText(text); alert("คัดลอกแล้ว ✅"); } catch { alert("คัดลอกไม่สำเร็จ"); } };
+
+      const seedEvents = [ { id: uid(), title: "OLVRCLUB Halloween Night Run", date: "2025-10-31", time: "18:00", location: "สวนรถไฟ (Rot Fai Park)", capacity: 60, description: "Night Run 5K — Limited Tee & Community Vibes." } ];
+
+      // --- QR helpers ---
+      function buildTicketPayload(reg){ if (!reg) return ""; return JSON.stringify({ k:"OLVR", v:1, id:reg.id, ev:reg.eventId, t:reg.token, n:reg.name }); }
+      function parseTicketPayload(text){ try { const p = JSON.parse(text); if (p?.k==="OLVR" && p?.id && p?.ev && p?.t) return p; } catch {} return null; }
+      function FakeQR({ payload }){
+        const bits = Array.from(payload).reduce((acc, ch, i)=> (acc + ch.charCodeAt(0)*(i+7)) % 9973, 0);
+        const size = 21; const cells = Array.from({ length: size*size }, (_, i)=> ((i*31 + bits*17) % 7) < 3);
+        return React.createElement('div', { className: 'p-3 border rounded-lg' },
+          React.createElement('div', { className: 'grid', style: { gridTemplateColumns: \`repeat(\${size}, 10px)\` } },
+            cells.map((on, i)=> React.createElement('div', { key: i, className: on?'bg-black':'bg-white', style:{ width:10, height:10 } }))
+          )
+        );
+      }
+
+      // --- Components ---
+      function App(){
+        const [events, setEvents] = useState(()=> loadLS(LS_EVENTS_KEY, seedEvents));
+        const [regs, setRegs] = useState(()=> loadLS(LS_REGIS_KEY, []));
+        const [adminAuthed, setAdminAuthed] = useState(false);
+        const [activeEventId, setActiveEventId] = useState(events[0]?.id || "");
+
+        useEffect(()=> saveLS(LS_EVENTS_KEY, events), [events]);
+        useEffect(()=> saveLS(LS_REGIS_KEY, regs), [regs]);
+        useEffect(()=> { try { setAdminAuthed(sessionStorage.getItem("olvr_admin_authed")==="1"); } catch {} }, []);
+        useEffect(()=> { if (!activeEventId && events.length) setActiveEventId(events[0].id); }, [events, activeEventId]);
+
+        const activeEvent = useMemo(()=> events.find(e=> e.id===activeEventId) || null, [events, activeEventId]);
+        const regsForActive = useMemo(()=> regs.filter(r=> r.eventId===activeEventId), [regs, activeEventId]);
+        const spotsLeft = useMemo(()=> activeEvent ? Math.max(0, activeEvent.capacity - regsForActive.length) : 0, [activeEvent, regsForActive]);
+
+        return React.createElement('div', { className: 'min-h-screen' },
+          React.createElement(motion.header, { initial:{opacity:0,y:-8}, animate:{opacity:1,y:0}, className:'sticky top-0 z-10 backdrop-blur bg-white/70 border-b' },
+            React.createElement('div', { className:'max-w-5xl mx-auto px-4 py-4 flex items-center justify-between' },
+              React.createElement('div', { className:'flex items-center gap-3' },
+                React.createElement('div', { className:'w-10 h-10 rounded-2xl bg-black text-white grid place-items-center font-bold' }, 'OLVR'),
+                React.createElement('div', null,
+                  React.createElement('h1', { className:'text-xl font-bold' }, 'OLVR Club — Events & Registration'),
+                  React.createElement('p', { className:'text-xs text-slate-500' }, 'บริหารตารางกิจกรรม + หน้าลงทะเบียน | Manage events, sign-ups')
+                )
+              )
+            )
+          ),
+          React.createElement('main', { className:'max-w-5xl mx-auto px-4 py-6' },
+            React.createElement(Tabs, { defaultValue:'schedule', className:'w-full' },
+              React.createElement(TabsList, { className:'grid grid-cols-5 w-full' },
+                React.createElement(TabsTrigger, { value:'schedule', className:'flex gap-2' }, React.createElement(Lucide.CalendarDays, { className:'w-4' }), 'ตารางกิจกรรม'),
+                React.createElement(TabsTrigger, { value:'register', className:'flex gap-2' }, React.createElement(Lucide.ClipboardList, { className:'w-4' }), 'ลงทะเบียน'),
+                React.createElement(TabsTrigger, { value:'attendees', className:'flex gap-2' }, React.createElement(Lucide.Users, { className:'w-4' }), 'ผู้เข้าร่วม'),
+                React.createElement(TabsTrigger, { value:'admin', className:'flex gap-2' }, React.createElement(Lucide.PlusCircle, { className:'w-4' }), 'จัดการ'),
+                React.createElement(TabsTrigger, { value:'checkin', className:'flex gap-2' }, React.createElement(Lucide.QrCode, { className:'w-4' }), 'เช็คอิน')
+              ),
+              React.createElement(TabsContent, { value:'schedule', className:'mt-6' }, React.createElement(ScheduleView, { events, regs, setActiveEventId })),
+              React.createElement(TabsContent, { value:'register', className:'mt-6' }, React.createElement(RegisterView, {
+                events, activeEventId, setActiveEventId,
+                onSubmit: (payload)=>{
+                  if (!payload.eventId) return alert("กรุณาเลือกกิจกรรม");
+                  const count = regs.filter(r => r.eventId === payload.eventId).length;
+                  const cap = events.find(e => e.id === payload.eventId)?.capacity ?? 0;
+                  if (count >= cap) return alert("ขออภัย กิจกรรมเต็มแล้ว");
+                  const base = { ...payload, id: uid(), createdAt: new Date().toISOString() };
+                  const token = \`\${base.id}.\${Math.random().toString(36).slice(2,10)}\`;
+                  const reg = { ...base, token, checkedInAt: null };
+                  setRegs(prev => [reg, ...prev]);
+                  window.__setTicket?.(reg);
+                }
+              })),
+              React.createElement(TabsContent, { value:'attendees', className:'mt-6' }, React.createElement(AttendeesView, {
+                events, activeEventId, setActiveEventId, regs: regs.filter(r=> r.eventId===activeEventId),
+                onRemove: (id)=> setRegs(prev=> prev.filter(r=> r.id!==id)),
+                onToggleCheckIn: (id)=> setRegs(prev=> prev.map(r=> r.id===id ? { ...r, checkedInAt: r.checkedInAt? null : new Date().toISOString() } : r))
+              })),
+              React.createElement(TabsContent, { value:'admin', className:'mt-6' },
+                adminAuthed
+                  ? React.createElement(AdminView, { events, setEvents, setActiveEventId, regs, setRegs, activeEvent, spotsLeft })
+                  : React.createElement(AdminLogin, { onAuthed:()=> { setAdminAuthed(true); try { sessionStorage.setItem("olvr_admin_authed","1"); } catch {} } })
+              ),
+              React.createElement(TabsContent, { value:'checkin', className:'mt-6' }, React.createElement(CheckinView, {
+                events, regs, onSuccess: (regId)=> setRegs(prev=> prev.map(r=> r.id===regId ? { ...r, checkedInAt: r.checkedInAt || new Date().toISOString() } : r))
+              }))
+            )
+          )
+        ));
+      }
+
+      function ScheduleView({ events, regs, setActiveEventId }){
+        const byDate = [...events].sort((a,b)=> a.date.localeCompare(b.date));
+        return React.createElement('div', { className:'grid md:grid-cols-2 gap-4' },
+          byDate.map(e => {
+            const count = regs.filter(r => r.eventId === e.id).length;
+            const left = Math.max(0, e.capacity - count);
+            return React.createElement(Card, { key: e.id, className:'shadow-sm' },
+              React.createElement(CardContent, { className:'p-5' },
+                React.createElement('div', { className:'flex items-start justify-between' },
+                  React.createElement('div', null,
+                    React.createElement('h3', { className:'text-lg font-semibold' }, e.title),
+                    React.createElement('p', { className:'text-sm text-slate-600 mt-1' }, \`\${toDateThai(e.date)} • \${e.time} • \${e.location}\`)
+                  ),
+                  React.createElement('div', { className:'text-right' },
+                    React.createElement('div', { className: \`text-xs font-medium \${left>0?'text-emerald-600':'text-rose-600'}\` }, left>0? \`เหลือที่นั่ง \${left}\` : 'เต็มแล้ว'),
+                    React.createElement('div', { className:'text-[10px] text-slate-400' }, \`Capacity \${e.capacity}\`)
+                  )
+                ),
+                React.createElement('p', { className:'text-sm mt-3 text-slate-700 whitespace-pre-wrap' }, e.description),
+                React.createElement('div', { className:'mt-4 flex gap-2' },
+                  React.createElement(Button, { onClick: ()=> setActiveEventId(e.id), 'data-size':'sm' }, 'ไปหน้าลงทะเบียน'),
+                  React.createElement(QRButton, { text: \`OLVRCLUB | \${e.title} @ \${e.location} on \${e.date} \${e.time}\` })
+                )
+              )
+            );
+          })
+        );
+      }
+
+      function RegisterView({ events, activeEventId, setActiveEventId, onSubmit }){
+        const [form, setForm] = useState({ eventId: activeEventId || "", name: "", phone: "", email: "", size: "M", note: "" });
+        const [ticketOpen, setTicketOpen] = useState(false);
+        const [ticket, setTicket] = useState(null);
+        window.__setTicket = (reg) => { setTicket(reg); setTicketOpen(true); };
+        useEffect(()=> setForm(f=> ({...f, eventId: activeEventId || ""})), [activeEventId]);
+        const handle = (k,v) => setForm(prev => ({...prev, [k]: v}));
+        const submit = (e) => { e.preventDefault(); if (!form.name || !form.phone) return alert("กรุณากรอกชื่อและเบอร์โทร"); onSubmit(form); setForm({ eventId: activeEventId || "", name: "", phone: "", email: "", size: "M", note: "" }); };
+        return React.createElement(Card, { className:'shadow-sm' },
+          React.createElement(CardContent, { className:'p-6' },
+            React.createElement('div', { className:'grid md:grid-cols-2 gap-6' },
+              React.createElement('div', { className:'space-y-4' },
+                React.createElement('div', null,
+                  React.createElement(Label, null, 'เลือกกิจกรรม / Event'),
+                  React.createElement(Select, { value: form.eventId, onValueChange: (v)=> { handle('eventId', v); setActiveEventId(v); } },
+                    React.createElement(SelectTrigger, { className:'mt-1' }, React.createElement(SelectValue, { placeholder:'เลือกกิจกรรม' })),
+                    React.createElement(SelectContent, null, events.map(e => React.createElement(SelectItem, { key:e.id, value:e.id }, \`\${toDateThai(e.date)} — \${e.title}\`)))
+                  )
+                ),
+                React.createElement('div', null, React.createElement(Label, null, 'ชื่อ-สกุล (Name)'), React.createElement(Input, { className:'mt-1', value:form.name, onChange:(e)=> handle('name', e.target.value), placeholder:'สมชาย วิ่งไว / Somchai Fast' })),
+                React.createElement('div', { className:'grid grid-cols-2 gap-3' },
+                  React.createElement('div', null, React.createElement(Label, null, 'เบอร์โทร (Phone)'), React.createElement(Input, { className:'mt-1', value:form.phone, onChange:(e)=> handle('phone', e.target.value), placeholder:'08x-xxx-xxxx' })),
+                  React.createElement('div', null, React.createElement(Label, null, 'อีเมล (Email)'), React.createElement(Input, { className:'mt-1', type:'email', value:form.email, onChange:(e)=> handle('email', e.target.value), placeholder:'you@example.com' }))
+                ),
+                React.createElement('div', null,
+                  React.createElement(Label, null, 'ขนาดเสื้อ (Shirt size)'),
+                  React.createElement(Select, { value: form.size, onValueChange: (v)=> handle('size', v) },
+                    React.createElement(SelectTrigger, { className:'mt-1' }, React.createElement(SelectValue)),
+                    React.createElement(SelectContent, null, ["XS","S","M","L","XL","2XL"].map(s => React.createElement(SelectItem, { key:s, value:s }, s)))
+                  )
+                ),
+                React.createElement('div', null, React.createElement(Label, null, 'หมายเหตุ (Note)'), React.createElement(Textarea, { className:'mt-1', value:form.note, onChange:(e)=> handle('note', e.target.value), placeholder:'Pace, กลุ่มวิ่ง, แพ้ยา/อาหาร ฯลฯ' })),
+                React.createElement(Button, { onClick: submit, className:'w-full' }, 'ยืนยันลงทะเบียน'),
+                ticketOpen && ticket && React.createElement('div', { className:'fixed inset-0 bg-black/40 grid place-items-center p-4', onClick: ()=> setTicketOpen(false) },
+                  React.createElement('div', { className:'bg-white rounded-2xl p-6 w-full max-w-sm', onClick:(e)=> e.stopPropagation() },
+                    React.createElement('div', { className:'font-semibold text-lg' }, 'ลงทะเบียนสำเร็จ 🎉'),
+                    React.createElement('p', { className:'text-sm text-slate-600 mt-1' }, 'นี่คือ QR สำหรับยืนยันเข้าร่วมงาน — กรุณาบันทึกภาพหน้าจอเก็บไว้ใช้เช็คอินหน้างาน'),
+                    React.createElement('div', { className:'my-4 grid place-items-center' }, React.createElement(FakeQR, { payload: buildTicketPayload(ticket) })),
+                    React.createElement('div', { className:'text-xs bg-slate-50 rounded-lg p-3 border' }, 'โค้ดของคุณ: ', React.createElement('span', { className:'font-mono break-all' }, buildTicketPayload(ticket))),
+                    React.createElement('div', { className:'mt-4 flex gap-2 justify-end' },
+                      React.createElement(Button, { onClick: ()=> copy(buildTicketPayload(ticket)) }, 'คัดลอกโค้ด'),
+                      React.createElement(Button, { onClick: ()=> setTicketOpen(false), variant:'secondary' }, 'ปิด')
+                    )
+                  )
+                )
+              ),
+              React.createElement('div', { className:'rounded-2xl bg-slate-50 p-5 border' },
+                React.createElement('h4', { className:'font-semibold mb-2' }, 'สิทธิประโยชน์ผู้เข้าร่วม'),
+                React.createElement('ul', { className:'list-disc pl-5 text-sm space-y-1 text-slate-700' },
+                  React.createElement('li', null, 'ร่วมวิ่งกับ OLVR Club & Community'),
+                  React.createElement('li', null, 'Limited Tee/Badge (ขึ้นกับกิจกรรม)'),
+                  React.createElement('li', null, 'ภาพถ่าย + Highlight หลังจบงาน')
+                ),
+                React.createElement('div', { className:'mt-5 text-xs text-slate-500' }, '*ข้อมูลของคุณจะถูกเก็บเฉพาะเพื่อการจัดกิจกรรม (PDPA)')
+              )
+            )
+          )
+        );
+      }
+
+      function AttendeesView({ events, activeEventId, setActiveEventId, regs, onRemove, onToggleCheckIn }){
+        const active = events.find(e=> e.id===activeEventId);
+        const exportCSV = () => {
+          const header = ["No","Name","Phone","Email","Size","Note","RegisteredAt"].join(",");
+          const rows = regs.map((r,i)=> [i+1, r.name, r.phone, r.email, r.size, JSON.stringify(r.note||"").replaceAll(",",";"), r.createdAt].join(","));
+          const csv = [header, ...rows].join("\n");
+          const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+          const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = \`\${(active?.title||"attendees").replaceAll(" ", "_")}.csv\`; a.click(); URL.revokeObjectURL(url);
+        };
+        return React.createElement('div', { className:'space-y-4' },
+          React.createElement('div', { className:'flex flex-col md:flex-row md:items-end gap-3' },
+            React.createElement('div', { className:'grow' },
+              React.createElement(Label, null, 'เลือกกิจกรรม'),
+              React.createElement(Select, { value: activeEventId, onValueChange: (v)=> setActiveEventId(v) },
+                React.createElement(SelectTrigger, { className:'mt-1' }, React.createElement(SelectValue)),
+                React.createElement(SelectContent, null, events.map(e=> React.createElement(SelectItem, { key:e.id, value:e.id }, \`\${toDateThai(e.date)} — \${e.title}\`)))
+              )
+            ),
+            React.createElement('div', { className:'flex gap-2' },
+              React.createElement(Button, { onClick: exportCSV, variant:'secondary' }, 'Export CSV'),
+              React.createElement(QRButton, { text: \`OLVRCLUB \${active?.title||"Event"}\` })
+            )
+          ),
+          React.createElement(Card, { className:'shadow-sm' },
+            React.createElement(CardContent, { className:'p-0' },
+              React.createElement('div', { className:'grid grid-cols-12 px-4 py-3 text-xs font-semibold text-slate-500 border-b bg-slate-50 rounded-t-2xl' },
+                React.createElement('div', { className:'col-span-1' }, '#'),
+                React.createElement('div', { className:'col-span-3' }, 'ชื่อ'),
+                React.createElement('div', { className:'col-span-2' }, 'โทร'),
+                React.createElement('div', { className:'col-span-2' }, 'อีเมล'),
+                React.createElement('div', { className:'col-span-1' }, 'Size'),
+                React.createElement('div', { className:'col-span-1' }, 'เช็คอิน'),
+                React.createElement('div', { className:'col-span-2 text-right pr-2' }, 'ลบ')
+              ),
+              regs.length===0 && React.createElement('div', { className:'p-6 text-sm text-slate-500' }, 'ยังไม่มีผู้ลงทะเบียน'),
+              regs.map((r, idx)=> React.createElement('div', { key: r.id, className:'grid grid-cols-12 px-4 py-3 items-center border-b last:border-b-0' },
+                React.createElement('div', { className:'col-span-1 text-sm text-slate-500' }, idx+1),
+                React.createElement('div', { className:'col-span-3 font-medium' }, r.name),
+                React.createElement('div', { className:'col-span-2 text-sm' }, r.phone),
+                React.createElement('div', { className:'col-span-2 text-sm truncate' }, r.email),
+                React.createElement('div', { className:'col-span-1' }, r.size),
+                React.createElement('div', { className:'col-span-1' }, React.createElement('span', { className: \`inline-flex items-center gap-1 text-xs \${r.checkedInAt? 'text-emerald-600' : 'text-slate-400'}\` }, r.checkedInAt? '✓' : '-')),
+                React.createElement('div', { className:'col-span-2 flex justify-end pr-2 gap-1' },
+                  React.createElement(Button, { 'data-size':'sm', variant:'outline', onClick: ()=> onToggleCheckIn?.(r.id) }, 'สลับสถานะ'),
+                  React.createElement(Button, { 'data-size':'icon', variant:'ghost', onClick: ()=> onRemove(r.id), title:'ลบ' }, React.createElement(Lucide.Trash2, { className:'w-4' }))
+                )
+              ))
+            )
+          )
+        );
+      }
+
+      function AdminLogin({ onAuthed }){
+        const [pass, setPass] = useState(""); const [show, setShow] = useState(false);
+        const tryLogin = (e) => { e?.preventDefault?.(); if (pass === getAdminPass()) { onAuthed(); } else alert("รหัสผ่านไม่ถูกต้อง"); };
+        return React.createElement(Card, { className:'shadow-sm' },
+          React.createElement(CardContent, { className:'p-6 max-w-md' },
+            React.createElement('h3', { className:'font-semibold text-lg' }, 'เข้าสู่ระบบผู้ดูแล (Admin)'),
+            React.createElement('p', { className:'text-sm text-slate-600 mt-1' }, 'เฉพาะแอดมินเท่านั้นที่แก้ไขข้อมูลกิจกรรมได้'),
+            React.createElement('form', { onSubmit: tryLogin, className:'mt-4 space-y-3' },
+              React.createElement('div', null, React.createElement(Label, null, 'รหัสผ่าน'),
+                React.createElement('div', { className:'flex gap-2 mt-1' },
+                  React.createElement(Input, { type: show?'text':'password', value: pass, onChange: (e)=> setPass(e.target.value), placeholder:'••••••' }),
+                  React.createElement(Button, { type:'button', variant:'secondary', onClick: ()=> setShow(s=>!s) }, show?'ซ่อน':'แสดง')
+                )
+              ),
+              React.createElement('div', { className:'flex items-center gap-2' }, React.createElement(Button, { type:'submit' }, 'เข้าสู่ระบบ')),
+              React.createElement('p', { className:'text-xs text-slate-400' }, '* ค่าเริ่มต้น: ', React.createElement('span', { className:'font-mono' }, 'olvradmin'), ' (เปลี่ยนได้ภายในหน้า Admin)')
+            )
+          )
+        );
+      }
+
+      function ChangePassword(){
+        const [current, setCurrent] = useState(""); const [next1, setNext1] = useState(""); const [next2, setNext2] = useState("");
+        const doChange = (e)=>{ e.preventDefault();
+          if (current !== getAdminPass()) return alert("รหัสผ่านปัจจุบันไม่ถูกต้อง");
+          if (!next1 || next1.length < 6) return alert("รหัสผ่านใหม่อย่างน้อย 6 ตัวอักษร");
+          if (next1 !== next2) return alert("รหัสผ่านใหม่ไม่ตรงกัน");
+          if (setAdminPass(next1)) alert("อัปเดตรหัสผ่านแล้ว ✅"); else alert("ไม่สามารถบันทึกได้");
+        };
+        return React.createElement('form', { onSubmit: doChange, className:'mt-2 space-y-3 max-w-md' },
+          React.createElement('div', null, React.createElement(Label, null, 'รหัสผ่านปัจจุบัน'), React.createElement(Input, { className:'mt-1', type:'password', value:current, onChange:(e)=> setCurrent(e.target.value), placeholder:'••••••' })),
+          React.createElement('div', null, React.createElement(Label, null, 'รหัสผ่านใหม่'), React.createElement(Input, { className:'mt-1', type:'password', value:next1, onChange:(e)=> setNext1(e.target.value), placeholder:'อย่างน้อย 6 ตัวอักษร' })),
+          React.createElement('div', null, React.createElement(Label, null, 'ยืนยันรหัสผ่านใหม่'), React.createElement(Input, { className:'mt-1', type:'password', value:next2, onChange:(e)=> setNext2(e.target.value), placeholder:'พิมพ์ซ้ำอีกครั้ง' })),
+          React.createElement('div', { className:'flex gap-2' }, React.createElement(Button, { type:'submit' }, 'บันทึกรหัสผ่าน')),
+          React.createElement('p', { className:'text-xs text-slate-500' }, '* ปัจจุบันเป็นการป้องกันฝั่งผู้ใช้ (client-side). ถ้าต้องการความปลอดภัยระดับองค์กร แนะนำต่อระบบหลังบ้าน/บัญชีสมาชิก')
+        );
+      }
+
+      function EventListAdmin({ events, setActiveEventId, onRemove }){
+        const sorted = [...events].sort((a,b)=> a.date.localeCompare(b.date));
+        return React.createElement(Card, { className:'shadow-sm mt-6' },
+          React.createElement(CardContent, { className:'p-0' },
+            React.createElement('div', { className:'px-4 py-3 text-sm font-semibold border-b bg-slate-50 rounded-t-2xl' }, 'กิจกรรมทั้งหมด'),
+            sorted.length===0 && React.createElement('div', { className:'p-6 text-sm text-slate-500' }, 'ยังไม่มีกิจกรรม'),
+            sorted.map(e =>
+              React.createElement('div', { key:e.id, className:'flex items-center justify-between gap-3 px-4 py-3 border-b last:border-b-0' },
+                React.createElement('div', null,
+                  React.createElement('div', { className:'font-medium' }, e.title),
+                  React.createElement('div', { className:'text-xs text-slate-500' }, \`\${toDateThai(e.date)} • \${e.time} • \${e.location}\`)
+                ),
+                React.createElement('div', { className:'flex items-center gap-2' },
+                  React.createElement(Button, { 'data-size':'sm', variant:'secondary', onClick: ()=> setActiveEventId(e.id) }, 'เลือก'),
+                  React.createElement(Button, { 'data-size':'sm', variant:'ghost', onClick: ()=> onRemove(e.id) }, React.createElement(Lucide.Trash2, { className:'w-4' }))
+                )
+              )
+            )
+          )
+        );
+      }
+
+      function AdminView({ events, setEvents, setActiveEventId, regs, setRegs, activeEvent, spotsLeft }){
+        const [form, setForm] = useState({ title:"", date:"", time:"18:00", location:"", capacity:30, description:"" });
+        const create = (e) => { e.preventDefault();
+          if (!form.title || !form.date || !form.time) return alert("โปรดกรอกชื่อ/วันที่/เวลา");
+          const newEvent = { id: uid(), ...form, capacity: Number(form.capacity) };
+          setEvents(prev => [newEvent, ...prev]); setActiveEventId(newEvent.id);
+          setForm({ title:"", date:"", time:"18:00", location:"", capacity:30, description:"" });
+        };
+        const removeEvent = (id) => { if (!confirm("ลบกิจกรรมนี้และผู้สมัครทั้งหมด?")) return;
+          setEvents(prev=> prev.filter(e=> e.id!==id)); setRegs(prev=> prev.filter(r=> r.eventId!==id));
+        };
+        const exportJSON = () => { const data = { events, regs }; const blob = new Blob([JSON.stringify(data,null,2)], { type: "application/json" });
+          const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = \`olvrclub_backup_\${Date.now()}.json\`; a.click(); URL.revokeObjectURL(url);
+        };
+        const importJSON = async (file) => { const text = await file.text();
+          try { const data = JSON.parse(text); if (Array.isArray(data.events)) setEvents(data.events); if (Array.isArray(data.regs)) setRegs(data.regs); alert("นำเข้าข้อมูลแล้ว ✅"); }
+          catch { alert("ไฟล์ไม่ถูกต้อง"); }
+        };
+        return React.createElement('div', { className:'grid md:grid-cols-3 gap-6' },
+          React.createElement(Card, { className:'shadow-sm md:col-span-2' },
+            React.createElement(CardContent, { className:'p-6' },
+              React.createElement('h3', { className:'font-semibold mb-4' }, 'สร้างกิจกรรมใหม่'),
+              React.createElement('form', { onSubmit: create, className:'grid grid-cols-1 md:grid-cols-2 gap-4' },
+                React.createElement('div', { className:'md:col-span-2' }, React.createElement(Label, null, 'ชื่อกิจกรรม'), React.createElement(Input, { className:'mt-1', value:form.title, onChange:(e)=> setForm({...form, title:e.target.value}), placeholder:'OLVR Morning Tempo 10K' })),
+                React.createElement('div', null, React.createElement(Label, null, 'วันที่'), React.createElement(Input, { className:'mt-1', type:'date', value:form.date, onChange:(e)=> setForm({...form, date:e.target.value}) })),
+                React.createElement('div', null, React.createElement(Label, null, 'เวลา'), React.createElement(Input, { className:'mt-1', type:'time', value:form.time, onChange:(e)=> setForm({...form, time:e.target.value}) })),
+                React.createElement('div', { className:'md:col-span-2' }, React.createElement(Label, null, 'สถานที่'), React.createElement(Input, { className:'mt-1', value:form.location, onChange:(e)=> setForm({...form, location:e.target.value}), placeholder:'สวนรถไฟ / Benjakitti Park' })),
+                React.createElement('div', null, React.createElement(Label, null, 'จำนวนผู้เข้าร่วม (Capacity)'), React.createElement(Input, { className:'mt-1', type:'number', min:'1', value:form.capacity, onChange:(e)=> setForm({...form, capacity:e.target.value}) })),
+                React.createElement('div', { className:'md:col-span-2' }, React.createElement(Label, null, 'รายละเอียด'), React.createElement(Textarea, { className:'mt-1', value:form.description, onChange:(e)=> setForm({...form, description:e.target.value}), placeholder:'ระยะทาง, เส้นทาง, ของแจก, เงื่อนไข ฯลฯ' })),
+                React.createElement('div', { className:'md:col-span-2 flex gap-2' }, React.createElement(Button, { type:'submit' }, React.createElement(Lucide.PlusCircle, { className:'w-4 mr-2 inline' }), 'สร้างกิจกรรม'))
+              )
+            )
+          ),
+          React.createElement(Card, { className:'shadow-sm' },
+            React.createElement(CardContent, { className:'p-6 space-y-3' },
+              React.createElement('h3', { className:'font-semibold' }, 'ข้อมูลกิจกรรมล่าสุด'),
+              activeEvent
+                ? React.createElement('div', { className:'text-sm space-y-1' },
+                    React.createElement('div', { className:'font-medium' }, activeEvent.title),
+                    React.createElement('div', null, \`\${toDateThai(activeEvent.date)} • \${activeEvent.time}\`),
+                    React.createElement('div', null, activeEvent.location),
+                    React.createElement('div', null, \`Capacity: \${activeEvent.capacity} | เหลือ \${spotsLeft}\`),
+                    React.createElement('div', { className:'flex gap-2 pt-2' },
+                      React.createElement(QRButton, { text: \`OLVRCLUB \${activeEvent.title}\` }),
+                      React.createElement(Button, { variant:'destructive', onClick: ()=> removeEvent(activeEvent.id) }, React.createElement(Lucide.Trash2, { className:'w-4 mr-2 inline' }), 'ลบกิจกรรม')
+                    )
+                  )
+                : React.createElement('div', { className:'text-sm text-slate-500' }, 'ยังไม่มีกิจกรรมที่เลือก'),
+              React.createElement('div', { className:'pt-4 border-t' }),
+              React.createElement('h4', { className:'font-semibold' }, 'สำรอง/กู้คืนข้อมูล'),
+              React.createElement('div', { className:'flex gap-2' },
+                React.createElement(Button, { variant:'secondary', onClick: exportJSON }, 'Export JSON'),
+                React.createElement('label', { className:'inline-flex items-center gap-2 text-sm cursor-pointer' },
+                  React.createElement(Lucide.Upload, { className:'w-4' }), React.createElement('span', null, 'Import JSON'),
+                  React.createElement('input', { type:'file', accept:'application/json', className:'hidden', onChange:(e)=> e.target.files?.[0] && importJSON(e.target.files[0]) })
+                )
+              ),
+              React.createElement('div', { className:'pt-4 border-t' }),
+              React.createElement('h4', { className:'font-semibold' }, 'ความปลอดภัย (Admin Password)'),
+              React.createElement(ChangePassword, null)
+            )
+          ),
+          React.createElement('div', { className:'md:col-span-3' },
+            React.createElement(EventListAdmin, { events, setActiveEventId, onRemove: (id)=> {
+              if (!confirm("ลบกิจกรรมนี้?")) return;
+              setEvents(prev=> prev.filter(e=> e.id!==id));
+              setRegs(prev=> prev.filter(r=> r.eventId!==id));
+            }})
+          )
+        );
+      }
+
+      function QRButton({ text }){
+        const [open, setOpen] = useState(false);
+        return React.createElement(React.Fragment, null,
+          React.createElement(Button, { variant:'outline', onClick: ()=> setOpen(true) }, React.createElement(Lucide.QrCode, { className:'w-4 mr-2 inline' }), 'QR'),
+          open && React.createElement('div', { className:'fixed inset-0 bg-black/40 grid place-items-center p-4', onClick: ()=> setOpen(false) },
+            React.createElement('div', { className:'bg-white rounded-2xl p-6 w-full max-w-sm', onClick: (e)=> e.stopPropagation() },
+              React.createElement('div', { className:'flex items-center justify-between' },
+                React.createElement('div', { className:'font-semibold' }, 'QR — แชร์ข้อมูลกิจกรรม'),
+                React.createElement(Button, { variant:'ghost', size:'icon', onClick: ()=> setOpen(false) }, '✕')
+              ),
+              React.createElement('div', { className:'my-4 grid place-items-center' }, React.createElement(FakeQR, { payload: text })),
+              React.createElement('div', { className:'flex gap-2 justify-end' }, React.createElement(Button, { onClick: ()=> copy(text) }, React.createElement(Lucide.Share2, { className:'w-4 mr-2 inline' }), 'คัดลอกข้อความ'))
+            )
+          )
+        );
+      }
+
+      function EventListAdmin({ events, setActiveEventId, onRemove }){
+        const sorted = [...events].sort((a,b)=> a.date.localeCompare(b.date));
+        return React.createElement(Card, { className:'shadow-sm mt-6' },
+          React.createElement(CardContent, { className:'p-0' },
+            React.createElement('div', { className:'px-4 py-3 text-sm font-semibold border-b bg-slate-50 rounded-t-2xl' }, 'กิจกรรมทั้งหมด'),
+            sorted.length===0 && React.createElement('div', { className:'p-6 text-sm text-slate-500' }, 'ยังไม่มีกิจกรรม'),
+            sorted.map((e)=> React.createElement('div', { key:e.id, className:'flex items-center justify-between gap-3 px-4 py-3 border-b last:border-b-0' },
+              React.createElement('div', null,
+                React.createElement('div', { className:'font-medium' }, e.title),
+                React.createElement('div', { className:'text-xs text-slate-500' }, \`\${toDateThai(e.date)} • \${e.time} • \${e.location}\`)
+              ),
+              React.createElement('div', { className:'flex items-center gap-2' },
+                React.createElement(Button, { size:'sm', variant:'secondary', onClick: ()=> setActiveEventId(e.id) }, 'เลือก'),
+                React.createElement(Button, { size:'sm', variant:'ghost', onClick: ()=> onRemove(e.id) }, React.createElement(Lucide.Trash2, { className:'w-4' }))
+              )
+            ))
+          )
+        );
+      }
+
+      function CheckinView({ events, regs, onSuccess }){
+        const [eventId, setEventId] = useState(events[0]?.id || "");
+        const [input, setInput] = useState("");
+        const [result, setResult] = useState(null);
+        const [scanning, setScanning] = useState(false);
+        const videoRef = React.useRef(null);
+        const rafRef = React.useRef(0);
+        const streamRef = React.useRef(null);
+
+        const stopScan = () => {
+          setScanning(false);
+          try { cancelAnimationFrame(rafRef.current); } catch {}
+          try { streamRef.current?.getTracks?.().forEach(t=> t.stop()); } catch {}
+          streamRef.current = null;
+        };
+        const loopDetect = async () => {
+          if (!scanning) return;
+          try {
+            const el = videoRef.current;
+            if (el && el.readyState >= 2) {
+              if (window.BarcodeDetector) {
+                const detector = new window.BarcodeDetector({ formats:["qr_code"] });
+                const codes = await detector.detect(el);
+                if (codes && codes[0]?.rawValue) { setInput(codes[0].rawValue); stopScan(); }
+              }
+            }
+          } catch {}
+          rafRef.current = requestAnimationFrame(loopDetect);
+        };
+        const startScan = async () => {
+          try {
+            if (!navigator.mediaDevices?.getUserMedia) throw new Error("no camera api");
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+            streamRef.current = stream;
+            if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
+            setScanning(true); loopDetect();
+          } catch (e) { alert("อุปกรณ์นี้ไม่รองรับการสแกนในเว็บ กรุณาใช้แอปสแกนแล้วคัดลอกโค้ดมาแปะ"); }
+        };
+        const tryCheck = () => {
+          const p = parseTicketPayload(input.trim());
+          if (!p) { setResult({ ok:false, msg:"QR ไม่ถูกต้อง" }); return; }
+          const reg = regs.find(r=> r.id===p.id && r.eventId===p.ev && r.token===p.t);
+          if (!reg) { setResult({ ok:false, msg:"ไม่พบผู้ลงทะเบียนในกิจกรรมนี้" }); return; }
+          if (eventId && reg.eventId !== eventId) { setResult({ ok:false, msg:"QR ไม่ตรงกับกิจกรรมที่เลือก" }); return; }
+          onSuccess(reg.id); setResult({ ok:true, name: reg.name, time: new Date().toLocaleString() });
+        };
+
+        return React.createElement(Card, { className:'rounded-2xl shadow-sm' },
+          React.createElement(CardContent, { className:'p-6 space-y-4' },
+            React.createElement('div', { className:'grid md:grid-cols-2 gap-4' },
+              React.createElement('div', { className:'space-y-3' },
+                React.createElement('div', null,
+                  React.createElement(Label, null, 'เลือกกิจกรรม'),
+                  React.createElement(Select, { value: eventId, onValueChange: setEventId },
+                    React.createElement(SelectTrigger, { className:'mt-1' }, React.createElement(SelectValue)),
+                    React.createElement(SelectContent, null, events.map(e=> React.createElement(SelectItem, { key:e.id, value:e.id }, \`\${toDateThai(e.date)} — \${e.title}\`)))
+                  )
+                ),
+                React.createElement('div', null,
+                  React.createElement(Label, null, 'วาง/สแกนโค้ดจาก QR'),
+                  React.createElement(Textarea, { className:'mt-1', rows:4, placeholder:'วางข้อความโค้ดที่สแกนได้จาก QR ที่สมาชิกแสดง', value:input, onChange:(e)=> setInput(e.target.value) })
+                ),
+                React.createElement('div', { className:'flex gap-2' },
+                  React.createElement(Button, { onClick: tryCheck }, React.createElement(Lucide.CheckCheck, { className:'w-4 mr-2 inline' }), 'เช็คอิน'),
+                  !scanning
+                    ? React.createElement(Button, { variant:'secondary', onClick: startScan }, React.createElement(Lucide.Camera, { className:'w-4 mr-2 inline' }), 'เปิดกล้องสแกน')
+                    : React.createElement(Button, { variant:'destructive', onClick: stopScan }, React.createElement(Lucide.StopCircle, { className:'w-4 mr-2 inline' }), 'หยุดสแกน')
+                ),
+                React.createElement('p', { className:'text-xs text-slate-500' }, '* รองรับการสแกนผ่านกล้อง (ถ้าเบราว์เซอร์รองรับ) หรือใช้แอปสแกนแล้วคัดลอกโค้ดมาแปะเพื่อตรวจสอบ')
+              ),
+              React.createElement('div', { className:'rounded-2xl bg-slate-50 p-4 border' },
+                React.createElement('h4', { className:'font-semibold mb-2' }, 'ผลการตรวจสอบ'),
+                !result && React.createElement('div', { className:'text-sm text-slate-500' }, 'ยังไม่มีข้อมูล'),
+                result && (result.ok
+                  ? React.createElement('div', { className:'text-sm text-emerald-700' }, 'เช็คอินสำเร็จ ✅', React.createElement('br'), 'ผู้เข้าร่วม: ', React.createElement('span', { className:'font-medium' }, result.name), React.createElement('br'), 'เวลา: ', result.time)
+                  : React.createElement('div', { className:'text-sm text-rose-700' }, '❌ ', result.msg)
+                ),
+                scanning && React.createElement('div', { className:'mt-4 overflow-hidden rounded-xl border bg-black/90' },
+                  React.createElement('video', { ref: videoRef, className:'w-full h-64 object-cover', playsInline:true, muted:true })
+                )
+              )
+            )
+          )
+        );
+      }
+
+      // Mount
+      createRoot(document.getElementById('root')).render(React.createElement(App));
+    </script>
+  </body>
+</html>
